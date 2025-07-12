@@ -1,0 +1,106 @@
+import cv2
+import numpy as np
+from zona_interactiva import ZonaInteractiva
+
+# ===================================
+# CARGA DE ESCENARIO BASE
+# ===================================
+ruta_escenario = "/Users/pablosalameacordero/Downloads/VISION PROYECTO FINAL/PROYECTO_FINAL/proyecto_final_vision/recursos/cuadros.png"
+escenario = cv2.imread(ruta_escenario)
+
+# ===================================
+# DEFINICIÓN DE ZONAS DE INTERÉS
+# ===================================
+editor = ZonaInteractiva(ruta_escenario)
+zonas_dinamicas = []
+cantidad_zonas = 2  # Puedes cambiar según el número de fuentes
+
+for indice in range(cantidad_zonas):
+    print(f"🧩 Define la zona dinámica {indice+1} y presiona ENTER para continuar.")
+    seleccion = editor.ejecutar()
+
+    if seleccion is not None and len(seleccion) >= 3:
+        zonas_dinamicas.append(seleccion)
+    else:
+        print("⚠️ Zona no válida. Debe contener al menos 3 vértices.")
+        exit()
+
+# ===================================
+# CAPTURA DE VIDEO
+# ===================================
+camara_en_vivo = cv2.VideoCapture(0)
+clip_demostrativo = cv2.VideoCapture("/Users/pablosalameacordero/Downloads/VISION PROYECTO FINAL/PROYECTO_FINAL/proyecto_final_vision/recursos/guerra.mp4")
+
+# ===================================
+# MÁSCARAS Y RECORTES
+# ===================================
+zonas_mascaras = []
+zonas_invertidas = []
+coordenadas_zonas = []
+
+for zona in zonas_dinamicas:
+    lienzo = np.zeros_like(escenario[:, :, 0])
+    cv2.fillPoly(lienzo, [zona], 255)
+    lienzo_inv = cv2.bitwise_not(lienzo)
+    x, y, w, h = cv2.boundingRect(zona)
+
+    zonas_mascaras.append(lienzo[y:y+h, x:x+w])
+    zonas_invertidas.append(lienzo_inv[y:y+h, x:x+w])
+    coordenadas_zonas.append((x, y, w, h))
+
+# ===================================
+# BUCLE PRINCIPAL
+# ===================================
+while True:
+    ok_cam, imagen_cam = camara_en_vivo.read()
+    ok_clip, imagen_clip = clip_demostrativo.read()
+
+    if not ok_cam:
+        print("🚫 No se puede acceder a la cámara.")
+        break
+
+    if not ok_clip:
+        clip_demostrativo.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        ok_clip, imagen_clip = clip_demostrativo.read()
+
+    # Aplicar CLAHE al clip demostrativo
+    if ok_clip:
+        gris_clip = cv2.cvtColor(imagen_clip, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        clip_ecualizado = clahe.apply(gris_clip)
+        imagen_clip = cv2.cvtColor(clip_ecualizado, cv2.COLOR_GRAY2BGR)
+
+    lienzo_final = escenario.copy()
+    entradas = [imagen_cam, imagen_clip]  # Una fuente por zona
+
+    for i, (fuente, mascara, mascara_inv, (x, y, w, h)) in enumerate(zip(
+        entradas, zonas_mascaras, zonas_invertidas, coordenadas_zonas
+    )):
+        # Redimensionar fuente
+        fuente_ajustada = cv2.resize(fuente, (w, h))
+
+        # Suavizado morfológico con apertura
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        fuente_ajustada = cv2.morphologyEx(fuente_ajustada, cv2.MORPH_OPEN, kernel)
+
+        # Integración en la zona dinámica
+        fondo_area = lienzo_final[y:y+h, x:x+w]
+        fondo_filtrado = cv2.bitwise_and(fondo_area, fondo_area, mask=mascara_inv)
+        contenido_dinamico = cv2.bitwise_and(fuente_ajustada, fuente_ajustada, mask=mascara)
+
+        mezcla = cv2.add(fondo_filtrado, contenido_dinamico)
+        lienzo_final[y:y+h, x:x+w] = mezcla
+
+    # Mostrar el resultado
+    cv2.imshow("Vision Artificial (Pablo Salamea)", lienzo_final)
+
+    if cv2.waitKey(1) == 27:  # ESC
+        break
+
+# ===================================
+# FINALIZACIÓN
+# ===================================
+camara_en_vivo.release()
+clip_demostrativo.release()
+cv2.waitKey(1)  # Asegura cierre correcto en macOS
+cv2.destroyAllWindows()
